@@ -1,6 +1,3 @@
-Certainly! Here's a suggested README.md for the `proxmox-zpool-monitoring` repository:
-
-```markdown
 # Proxmox Zpool Monitoring
 
 A tool for monitoring ZFS zpools on a Proxmox server.
@@ -96,4 +93,4 @@ We welcome contributions! Please read our [contributing guidelines](CONTRIBUTING
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-```
+
