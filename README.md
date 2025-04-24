@@ -77,11 +77,11 @@ The script requires the following:
     sudo crontab -e
     ```
 
-    Add the following line to run the script every hour (adjust path and timing as needed):
+    Add the following line to run the script daily at 3 AM (adjust path and timing as needed):
 
     ```sh
-    # Example: Run hourly from the cloned directory
-    0 * * * * cd /path/to/proxmox-zpool-monitoring && sudo ./monitor.py >> /var/log/zpool-monitor.log 2>&1
+    # Example: Run daily at 3 AM from the cloned directory
+    0 3 * * * cd /path/to/proxmox-zpool-monitoring && sudo ./monitor.py >> /var/log/zpool-monitor.log 2>&1
     ```
     *Make sure to replace `/path/to/proxmox-zpool-monitoring` with the actual path.*
 
