@@ -25,15 +25,16 @@ This script is designed to help you monitor the health and status of ZFS zpools 
 - Checks individual disk SMART health status using `smartctl`.
 - Gathers SMART attributes like temperature, power-on hours, and lifetime remaining/used for both SATA and NVMe drives.
 - Calculates estimated SSD endurance (TBW) usage and remaining life (based on a configurable `RATED_TBW`).
-- Sends notifications via Gotify and/or Pushover using standard Python libraries.
-- Notification priority adjusts based on pool health.
-- Verbose mode for detailed console output.
+- Sends a summary notification for all pools via Gotify and/or Pushover using standard Python libraries.
+- Sends detailed notifications for individual disks *only if* an issue is detected (e.g., SMART failure, TBW exceeded, replacement needed soon).
+- Summary notification priority adjusts based on pool health; drive notification priority adjusts based on the specific issue.
+- Uses Python's `logging` module for output. `VERBOSE` flag enables detailed `DEBUG` level logging.
 
 ## Dependencies
 
 The script requires the following:
 
-- **Python 3:** The script is written in Python 3. Standard libraries like `subprocess`, `os`, `re`, `datetime`, `math`, `sys`, `urllib`, and `json` are used. No external Python packages are required.
+- **Python 3:** The script is written in Python 3. Standard libraries like `subprocess`, `os`, `re`, `datetime`, `math`, `sys`, `urllib`, `json`, and `logging` are used. No external Python packages are required.
 - **`zfsutils-linux`:** Provides the `zpool` and `zfs` commands used to query pool status and properties.
 - **`smartmontools`:** Provides the `smartctl` command used to query disk health and SMART attributes.
 
@@ -110,14 +111,14 @@ PUSHOVER_ENABLED = False # Control Pushover notifications
 POOLS_TO_MONITOR = ["rpool"] # List of ZFS pools to monitor
 RATED_TBW = 360 # Assumed SSD TBW rating in Terabytes
 REPLACEMENT_YEARS_AGE_LIMIT = 5 # Default age limit for replacement suggestion
-VERBOSE = False # Set to True to print status updates and raw smartctl output to console
+VERBOSE = False # Set to True for DEBUG level logging, False for INFO level logging
 ```
 
 - Set the `_ENABLED` flag to `True` for the notification services you want to use.
 - Fill in the corresponding `_URL`, `_API_KEY`, `_APP_TOKEN`, and `_USER_KEY` values.
 - Adjust `RATED_TBW` if you are using SSDs with a different endurance rating.
 - Modify the `POOLS_TO_MONITOR` list with the names of the ZFS pools you wish to monitor.
-- Set `VERBOSE` to `True` for detailed output during script execution.
+- Set `VERBOSE` to `True` for detailed debug logging during script execution (includes raw smartctl output and detailed drive summaries).
 
 ## Contributing
 

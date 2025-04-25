@@ -2,14 +2,14 @@
 
 ## 1. Overview
 
-`monitor.py` is a Python 3 script designed to run on a Proxmox host (or any Linux system with ZFS and smartmontools). Its primary purpose is to monitor the health and status of one or more ZFS pools (configurable via `POOLS_TO_MONITOR`) and the individual physical disks comprising those pools. It gathers key metrics and sends summary and detailed notifications via Gotify and/or Pushover.
+`monitor.py` is a Python 3 script designed to run on a Proxmox host (or any Linux system with ZFS and smartmontools). Its primary purpose is to monitor the health and status of one or more ZFS pools (configurable via `POOLS_TO_MONITOR`) and the individual physical disks comprising those pools. It gathers key metrics, logs status information, and sends a summary notification for all pools. It also sends detailed notifications for individual disks *only if* specific issues (like SMART failures, high TBW usage, or impending replacement needs) are detected. Notifications are sent via Gotify and/or Pushover.
 
 ## 2. Dependencies
 
 The script relies on the following:
 
 * **Python 3:** The script interpreter.
-* **Python Standard Libraries:** `subprocess`, `os`, `re`, `datetime`, `math`, `sys`, `urllib.request`, `urllib.parse`, `json`. No external Python packages are required.
+* **Python Standard Libraries:** `subprocess`, `os`, `re`, `datetime`, `math`, `sys`, `urllib.request`, `urllib.parse`, `json`, `logging`. No external Python packages are required.
 * **Command-line Utilities:**
   * `zpool`: For querying ZFS pool status and properties.
   * `smartctl`: (from `smartmontools`) For querying disk SMART health data.
@@ -31,29 +31,30 @@ The script requires configuration primarily through variables defined at the top
   * `POOLS_TO_MONITOR`: A Python list of strings containing the names of the ZFS pools to monitor (e.g., `["rpool", "tank"]`). Default is `["rpool"]`.
   * `RATED_TBW`: An integer representing the assumed Total Bytes Written endurance rating (in Terabytes) for SSDs. Used for life expectancy calculations. Default is `360`.
   * `REPLACEMENT_YEARS_AGE_LIMIT`: An integer representing the default age limit (in years) for suggesting drive replacement based purely on age. Default is `5`.
-  * `VERBOSE`: Set to `True` to print status updates and raw `smartctl` output to the console during execution. Default is `False`.
+  * `VERBOSE`: Set to `True` to enable `DEBUG` level logging (including raw `smartctl` output and detailed drive summaries). Set to `False` for `INFO` level logging (default).
 
 ## 4. Execution Flow
 
 1. **Initialization:**
     * Imports necessary Python modules.
     * Defines configuration variables (Gotify, Pushover, Monitoring).
+    * Sets up logging using `logging.basicConfig`. Log level is `DEBUG` if `VERBOSE` is `True`, otherwise `INFO`.
     * Retrieves the system `HOSTNAME` using `os.uname().nodename`.
     * Gets the current timestamp using `datetime.datetime.now()`.
     * Defines helper functions:
-        * `run_command(command)`: Executes a shell command using `subprocess.run` and returns stdout, stderr, and return code.
+        * `run_command(command)`: Executes a shell command using `subprocess.run` and returns stdout, stderr, and return code. Errors are logged.
         * `parse_smartctl_value(output, attribute_name)`: Parses specific SMART attributes from `smartctl -A` output, handling both SATA (column-based) and NVMe (key: value) formats. Returns the full value string for NVMe.
         * `parse_smartctl_health(output)`: Parses overall health ("PASSED", "FAILED", "Unknown") from `smartctl -H` output.
         * `parse_smartctl_model(output)`: Parses the device model from `smartctl -i` output.
-        * `send_notification(title, message, priority_level)`: Sends notifications using `urllib.request` to Gotify and/or Pushover based on enabled status and configuration.
+        * `send_notification(title, message, priority_level)`: Sends notifications using `urllib.request` to Gotify and/or Pushover based on enabled status and configuration. Errors are logged.
     * Initializes overall health status variables (`overall_health`, `overall_priority`) and containers for disk IDs (`all_disks`) and messages (`main_message_parts`).
-    * Optionally prints start message if `VERBOSE` is `True`.
+    * Logs script start message.
 
 2. **ZFS Pool Status Check (Loop):**
     * Iterates through each `pool_name` in the `POOLS_TO_MONITOR` list.
     * For each pool:
         * Runs `zpool status -x {pool_name}` using `run_command`.
-        * Determines pool health (`✅ Healthy`, `❌ Error: Pool not found.`, `⚠️ [Status Line]`) based on return code and output.
+        * Determines pool health (`✅ Healthy`, `❌ Error: Pool not found.`, `⚠️ [Status Line]`) based on return code and output. Logs the status.
         * Sets `current_priority` (1 for healthy, 8 for error/unhealthy).
         * Updates `overall_priority` and `overall_health` if the current pool's status is worse.
         * Constructs pool summary lines, including hostname and status.
@@ -62,54 +63,60 @@ The script requires configuration primarily through variables defined at the top
             * If the pool is *not* healthy, retrieves full `zpool status {pool_name}` output and appends the relevant `config:` section to the summary.
             * Runs `zpool status {pool_name}` again to find associated disk identifiers (`ata-`, `nvme-`, `wwn-` prefixes) using `re.findall`. Cleans partition suffixes (e.g., `-part1`) and adds unique IDs to the `all_disks` set.
         * Appends the collected summary lines for the pool to `main_message_parts`.
-    * Optionally prints completion message if `VERBOSE` is `True`.
+    * Logs pool check completion message.
 
 3. **Send Summary Notification:**
     * Joins the `main_message_parts` into a single message string.
-    * Calls `send_notification` with the title "ZFS Status Summary - [Hostname]", the combined message, and the determined `overall_priority`.
-    * Optionally prints status if `VERBOSE` is `True`.
+    * Logs that the summary notification is being sent.
+    * Calls `send_notification` with the title "ZFS Status Summary - [Hostname]", the combined message, and the determined `overall_priority` (based on the worst pool status).
 
 4. **Individual Disk SMART Check (Loop):**
-    * Optionally prints start message if `VERBOSE` is `True`.
+    * Logs disk check start message.
     * Sorts the unique disk IDs collected in `all_disks`.
     * Iterates through each unique `disk_id`:
+        * Initializes flags and variables for potential drive-specific notification (`send_drive_notification`, `drive_priority`, `drive_issue_reason`).
         * Constructs the path `/dev/disk/by-id/{disk_id}`.
-        * Checks if the path exists. If not, skips (prints message if `VERBOSE`).
+        * Checks if the path exists. If not, logs and skips.
         * Resolves the symbolic link to the actual device path (e.g., `/dev/nvme0n1`) using `os.path.realpath`.
         * Gets the base device name (e.g., `nvme0n1`) using `os.path.basename`.
-        * Checks if the resolved device path `/dev/{disk_dev}` exists. If not, skips (prints message if `VERBOSE`).
+        * Checks if the resolved device path `/dev/{disk_dev}` exists. If not, logs and skips.
         * Runs `smartctl -i`, `smartctl -H`, and `smartctl -A` for the device using `run_command`.
-        * Optionally prints raw `smartctl` output if `VERBOSE` is `True`.
-        * Checks return codes. If any `smartctl` command failed, prints a warning, sends a notification if health check failed, and skips detailed reporting for this disk.
+        * Logs raw `smartctl` output if log level is `DEBUG`.
+        * Checks return codes. If any `smartctl` command failed, logs a warning, sends a notification if health check (`-H`) failed (priority 8), and skips detailed reporting for this disk.
         * Parses `model` using `parse_smartctl_model`.
         * Parses `health` using `parse_smartctl_health`.
-        * Parses various SMART attributes using `parse_smartctl_value`, prioritizing NVMe standard names ("Temperature", "Power On Hours", "Percentage Used", "Data Units Written") and falling back to common SATA names ("Temperature_Celsius", "Power_On_Hours", "Percent_Lifetime_Remain", "Wear_Leveling_Count", "Total_LBAs_Written").
-        * Extracts the numeric temperature value from the parsed string (e.g., "50" from "50 Celsius").
-        * Calculates `days_powered` from `hours` (handling potential commas).
-        * Determines `life_used_str` based on available attributes (NVMe `Percentage Used` > SATA `Percent_Lifetime_Remain` > SATA `Wear_Leveling_Count`).
+        * **Checks for notification triggers:**
+            * If `health` is "FAILED", sets `send_drive_notification = True`, `drive_priority = 8`, `drive_issue_reason = "SMART Health FAILED"`.
+        * Parses various SMART attributes using `parse_smartctl_value`, prioritizing NVMe standard names and falling back to common SATA names.
+        * Extracts the numeric temperature value.
+        * Calculates `days_powered` from `hours`.
+        * Determines `life_used_str` based on available attributes.
         * Constructs the initial drive message lines (Model, Health, Temp, Power On, Life Used).
         * **SSD Endurance Calculation (Conditional):**
-            * Attempts to determine `tb_written`:
-                * Prioritizes NVMe `Data Units Written`: Extracts TB value from brackets (e.g., `[12.5 TB]`) using regex. Falls back to parsing the leading number as 512-byte units if brackets aren't present.
-                * If NVMe data unavailable, falls back to SATA `Total_LBAs_Written` (assuming 512-byte sectors).
+            * Attempts to determine `tb_written` from NVMe or SATA attributes.
             * If `tb_written`, `days_powered`, and `RATED_TBW` are valid:
-                * Calculates `gb_per_day` write rate.
-                * Calculates `percent_tbw_used`.
-                * Calculates `remaining_tb`.
-                * If `gb_per_day` is significant, calculates estimated `days_remaining_num` based on TBW.
-                * Calculates `years_remaining`.
-                * Determines the `replace_date_str` based on the *earlier* of the date calculated from `days_remaining_num` and the date calculated from `REPLACEMENT_YEARS_AGE_LIMIT`. Adds "(TBW limited)" or "(age limited)" indication. Handles cases where TBW is already exceeded or usage is very low.
-                * Appends detailed endurance lines (TB Written, GB/day, % TBW Used, Est. Life, Replace By) to the drive message.
-            * If calculation is not possible (non-SSD, missing data), appends a "Endurance stats N/A" message.
-            * Handles potential calculation errors (`ValueError`, `TypeError`, `ZeroDivisionError`, `AttributeError`) gracefully.
+                * Calculates `gb_per_day`, `percent_tbw_used`, `remaining_tb`, `days_remaining_num`, `years_remaining`.
+                * Determines the `replace_date_str` based on the *earlier* of the TBW-based and age-based limits.
+                * **Checks for notification triggers:**
+                    * If `replace_date_str` indicates "Now (TBW exceeded)", sets `send_drive_notification = True`, updates `drive_priority` (max 8), sets `drive_issue_reason` (if not already set).
+                    * If `replace_date_str` indicates replacement is due within one year (parses date), sets `send_drive_notification = True`, updates `drive_priority` (max 5), sets `drive_issue_reason` (if not already set).
+                * Appends detailed endurance lines to the drive message.
+            * If calculation is not possible, appends a "Endurance stats N/A" message.
+            * Handles potential calculation errors (`ValueError`, etc.), logs a warning, appends an error message, sets `send_drive_notification = True`, updates `drive_priority` (max 5), and sets `drive_issue_reason`.
         * Joins all drive message lines into `full_drive_message`.
-        * Optionally prints the formatted summary if `VERBOSE` is `True`.
-        * Calls `send_notification` with the title "Drive [Device Name] - [Hostname]", the `full_drive_message`, and the `overall_priority` (determined earlier by the worst pool status).
-        * Handles any unexpected errors during disk processing, prints an error, and sends a generic error notification for that disk.
-    * Optionally prints completion message if `VERBOSE` is `True`.
+        * Logs the formatted summary if log level is `DEBUG`.
+        * **Send Drive-Specific Notification (Conditional):**
+            * If `send_drive_notification` is `True`:
+                * Determines an appropriate `notification_title` based on the issue (e.g., "❌ Drive ... FAILED", "⚠️ Drive ... Issue").
+                * Logs the reason for sending the notification.
+                * Calls `send_notification` with the specific `notification_title`, `full_drive_message`, and the determined `drive_priority`.
+            * Else (no issue detected):
+                * Logs that the drive status is OK and no notification is sent.
+        * Handles any unexpected errors during disk processing, logs the error, and sends a generic error notification (priority 8) for that disk.
+    * Logs disk check completion message.
 
 5. **Completion:**
-    * Prints a final "Monitoring check complete" message with the timestamp.
+    * Logs a final "Monitoring check complete" message with the timestamp.
 
 ## 5. Calculations (Python Implementation)
 
@@ -140,11 +147,14 @@ The script requires configuration primarily through variables defined at the top
   * Sends POST to `PUSHOVER_API_URL`.
   * Authentication via `token` (`PUSHOVER_APP_TOKEN`) and `user` (`PUSHOVER_USER_KEY`) fields in the payload.
   * Payload includes `token`, `user`, `title`, `message`, `priority`.
-  * Pushover priority is mapped from Gotify priority: `<= 1` -> `-1` (low), `>= 8` -> `1` (high), others -> `0` (normal).
-* One summary notification is sent for all monitored pools.
-* Separate notifications are sent for each unique physical disk found.
-* The priority of *all* notifications is determined by the *worst* health status found among the monitored ZFS pools.
-* Network requests have a timeout of 10 seconds. Errors during notification sending are printed to stderr but do not stop the script.
+  * Pushover priority is mapped from the script's priority level: `<= 1` -> `-1` (low), `>= 8` -> `1` (high), others -> `0` (normal).
+* **Summary Notification:**
+  * One summary notification is always sent for all monitored pools.
+  * The priority of the summary notification (`overall_priority`) is determined by the *worst* health status found among the monitored ZFS pools (1 for all healthy, 8 if any pool has issues or errors).
+* **Drive-Specific Notifications:**
+  * Separate notifications are sent for individual physical disks *only if* an issue is detected during the SMART check (e.g., SMART health "FAILED", TBW exceeded, replacement suggested within a year, calculation error, SMART data retrieval error).
+  * The title and priority (`drive_priority`) of these notifications depend on the specific issue detected (e.g., priority 8 for FAILED/TBW exceeded, priority 5 for replacement suggested soon or calculation errors).
+* Network requests have a timeout of 10 seconds. Errors during notification sending are logged as warnings/errors but do not stop the script.
 
 ## 7. Assumptions and Limitations
 
