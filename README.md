@@ -58,6 +58,7 @@ The script requires the following:
     ```sh
     chmod +x monitor.py
     ```
+
     *(Optional: You can move `monitor.py` to a location in your PATH, like `/usr/local/bin/`, if desired)*
 
 ## Usage
@@ -69,6 +70,7 @@ The script requires the following:
     ```sh
     sudo ./monitor.py
     ```
+
     *(Or `sudo python3 monitor.py` if not executable or not in PATH)*
 
 3. To set up a cron job to run the script periodically, edit your crontab:
@@ -83,6 +85,7 @@ The script requires the following:
     # Example: Run daily at 3 AM from the cloned directory
     0 3 * * * cd /path/to/proxmox-zpool-monitoring && sudo ./monitor.py >> /var/log/zpool-monitor.log 2>&1
     ```
+
     *Make sure to replace `/path/to/proxmox-zpool-monitoring` with the actual path.*
 
 ## Configuration
