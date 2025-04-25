@@ -34,9 +34,16 @@ DATE_STR = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 # --- Helper Functions ---
 
 def run_command(command):
-    """Runs a shell command and returns its output."""
+    """Runs a shell command and returns its output, ensuring /usr/sbin is in PATH."""
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=False)
+        # Get a copy of the current environment
+        env = os.environ.copy()
+        # Ensure /usr/sbin is in the PATH for the subprocess
+        current_path = env.get('PATH', '')
+        if '/usr/sbin' not in current_path.split(os.pathsep):
+            env['PATH'] = f"/usr/sbin{os.pathsep}{current_path}"
+
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, check=False, env=env) # Pass modified env
         if result.returncode != 0:
             pass # Allow parsing logic to handle specific errors like 'pool not found'
         return result.stdout.strip(), result.stderr.strip(), result.returncode
